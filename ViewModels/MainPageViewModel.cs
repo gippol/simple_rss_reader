@@ -302,7 +302,8 @@ public partial class MainPageViewModel : ObservableObject
         else
         {
             // 取得済み記事から削除したフィードの記事を除外
-            _allFetchedItems.RemoveAll(i => i.SourceFeedName == channel.Name);
+            // (フィード名は重複しうるため、一意な URL で判定する)
+            _allFetchedItems.RemoveAll(i => i.SourceFeedUrl == channel.Url);
             ApplyFilterAndSort();
         }
 

@@ -13,6 +13,11 @@ public class FeedItem
     public string? ImageUrl { get; init; }
     public bool HasImage => !string.IsNullOrWhiteSpace(ImageUrl);
     public required string SourceFeedName { get; init; }
+
+    /// <summary>
+    /// 取得元フィードのURL。フィード名は重複しうるため、フィードとの対応付けにはこちらを使う
+    /// </summary>
+    public string SourceFeedUrl { get; init; } = string.Empty;
     public string Summary { get; init; } = string.Empty;
 
     /// <summary>

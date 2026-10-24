@@ -70,7 +70,7 @@ public class RssService
                 if (feed != null)
                 {
                     var feedTitle = customFeedName ?? feed.Title?.Text ?? "Feed";
-                    return ParseSyndicationFeed(feed, feedTitle);
+                    return ParseSyndicationFeed(feed, feedTitle, feedUrl);
                 }
             }
             catch (XmlException)
@@ -81,7 +81,7 @@ public class RssService
             // フォールバック: XDocument で直接 XML をパース (RSS 1.0 / RDF 等に対応)
             using (var stream = new MemoryStream(responseBytes))
             {
-                return ParseRdfOrGenericXml(stream, customFeedName);
+                return ParseRdfOrGenericXml(stream, customFeedName, feedUrl);
             }
         }
         catch (Exception ex)
@@ -91,7 +91,7 @@ public class RssService
         }
     }
 
-    private static List<FeedItem> ParseSyndicationFeed(SyndicationFeed feed, string feedTitle)
+    private static List<FeedItem> ParseSyndicationFeed(SyndicationFeed feed, string feedTitle, string feedUrl)
     {
         var items = new List<FeedItem>();
 
@@ -127,6 +127,7 @@ public class RssService
                 PublishDate = publishDate,
                 ImageUrl = imageUrl,
                 SourceFeedName = feedTitle,
+                SourceFeedUrl = feedUrl,
                 Summary = plainSummary
             });
         }
@@ -137,7 +138,7 @@ public class RssService
     /// <summary>
     /// RSS 1.0 (RDF) またはフォールバック用 XML パーサー
     /// </summary>
-    private static List<FeedItem> ParseRdfOrGenericXml(Stream stream, string? customFeedName)
+    private static List<FeedItem> ParseRdfOrGenericXml(Stream stream, string? customFeedName, string feedUrl)
     {
         var items = new List<FeedItem>();
         var doc = XDocument.Load(stream);
@@ -214,6 +215,7 @@ public class RssService
                 PublishDate = publishDate,
                 ImageUrl = imageUrl,
                 SourceFeedName = feedTitle,
+                SourceFeedUrl = feedUrl,
                 Summary = CleanHtml(rawSummary)
             });
         }
