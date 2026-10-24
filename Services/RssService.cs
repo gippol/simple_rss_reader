@@ -200,13 +200,9 @@ public class RssService
                                ? enclosureUrl
                                : null);
 
-            if (string.IsNullOrEmpty(imageUrl) && !string.IsNullOrWhiteSpace(rawSummary))
+            if (string.IsNullOrEmpty(imageUrl))
             {
-                var match = Regex.Match(rawSummary, @"<img\s+[^>]*?src=[""'](?<url>https?://[^""']+)[""']", RegexOptions.IgnoreCase);
-                if (match.Success)
-                {
-                    imageUrl = match.Groups["url"].Value;
-                }
+                imageUrl = FindImageInHtml(rawSummary);
             }
 
             items.Add(new FeedItem
@@ -293,16 +289,26 @@ public class RssService
             catch { }
         }
 
-        if (!string.IsNullOrWhiteSpace(htmlSources))
+        return FindImageInHtml(htmlSources);
+    }
+
+    private static readonly Regex ImgSrcRegex = new(@"<img\s+[^>]*?src=[""'](?<url>https?://[^""']+)[""']", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// HTML 内の &lt;img&gt; タグを順に調べ、トラッキング用画像 (tracker / beacon) を除いた最初の画像URLを返す
+    /// </summary>
+    private static string? FindImageInHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return null;
+
+        foreach (Match match in ImgSrcRegex.Matches(html))
         {
-            var match = Regex.Match(htmlSources, @"<img\s+[^>]*?src=[""'](?<url>https?://[^""']+)[""']", RegexOptions.IgnoreCase);
-            if (match.Success)
+            var candidate = match.Groups["url"].Value;
+            if (!candidate.Contains("tracker", StringComparison.OrdinalIgnoreCase) &&
+                !candidate.Contains("beacon", StringComparison.OrdinalIgnoreCase))
             {
-                var candidate = match.Groups["url"].Value;
-                if (!candidate.Contains("tracker") && !candidate.Contains("beacon"))
-                {
-                    return candidate;
-                }
+                return candidate;
             }
         }
 
