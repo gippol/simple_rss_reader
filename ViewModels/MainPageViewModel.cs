@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.System;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,6 +17,7 @@ public partial class MainPageViewModel : ObservableObject
     private readonly RssService _rssService = new();
     private readonly FeedStorageService _feedStorage = new();
     private readonly List<FeedItem> _allFetchedItems = new();
+    private CancellationTokenSource? _loadCts;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RemoveSelectedFeedCommand))]
@@ -27,6 +29,12 @@ public partial class MainPageViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool HasError { get; set; }
+
+    [ObservableProperty]
+    public partial string? StorageWarning { get; set; }
+
+    [ObservableProperty]
+    public partial bool HasStorageWarning { get; set; }
 
     [ObservableProperty]
     public partial string SearchText { get; set; } = string.Empty;
@@ -73,11 +81,15 @@ public partial class MainPageViewModel : ObservableObject
         FeedSources.Add(FeedChannel.AllFeedsChannel);
 
         // 保存済みのフィード一覧を読み込み (初回起動時はプリセットフィード)
-        var feeds = _feedStorage.Load() ?? RssService.GetDefaultFeeds();
+        var feeds = _feedStorage.Load(out var storageWarning) ?? RssService.GetDefaultFeeds();
         foreach (var feed in feeds)
         {
             FeedSources.Add(feed);
         }
+
+        // 読み込み失敗の通知は、フィード取得エラーで上書きされないよう別の表示にする
+        StorageWarning = storageWarning;
+        HasStorageWarning = storageWarning != null;
 
         SelectedFeedSource = FeedSources[0];
     }
@@ -108,7 +120,12 @@ public partial class MainPageViewModel : ObservableObject
     [RelayCommand]
     public async Task LoadFeedsAsync()
     {
-        if (IsLoading) return;
+        // 読み込み中に再要求された場合 (フィード切り替え・追加など) は、
+        // 前の読み込みをキャンセルして最新の選択状態で取得し直す
+        _loadCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _loadCts = cts;
+        var token = cts.Token;
 
         IsLoading = true;
         HasError = false;
@@ -117,35 +134,58 @@ public partial class MainPageViewModel : ObservableObject
 
         try
         {
-            _allFetchedItems.Clear();
-
             var targets = SelectedFeedSource == null || SelectedFeedSource.IsAllFeeds
                 ? FeedSources.Where(f => !f.IsAllFeeds).ToList()
                 : new List<FeedChannel> { SelectedFeedSource };
 
+            // 1つのフィードの失敗で全体が止まらないよう、フィードごとに例外を捕捉して失敗を記録する
             var tasks = targets.Select(async feed =>
             {
                 try
                 {
-                    return await _rssService.FetchFeedAsync(feed.Url, feed.Name);
+                    var items = await _rssService.FetchFeedAsync(feed.Url, feed.Name, token);
+                    return (Feed: feed, Items: items, Error: (Exception?)null);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    return (Feed: feed, Items: new List<FeedItem>(), Error: (Exception?)null);
                 }
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"Failed to load feed {feed.Name}: {ex.Message}");
-                    return new List<FeedItem>();
+                    return (Feed: feed, Items: new List<FeedItem>(), Error: (Exception?)ex);
                 }
             });
 
             var results = await Task.WhenAll(tasks);
-            foreach (var feedItems in results)
+
+            // 新しい読み込みに置き換えられた場合は結果を破棄する
+            if (token.IsCancellationRequested)
+                return;
+
+            _allFetchedItems.Clear();
+            foreach (var result in results)
             {
-                _allFetchedItems.AddRange(feedItems);
+                _allFetchedItems.AddRange(result.Items);
             }
 
             ApplyFilterAndSort();
-            StatusText = $"{_allFetchedItems.Count} 件の記事を取得しました（{DateTime.Now:HH:mm:ss} 更新）";
+
+            var failed = results.Where(r => r.Error != null).ToList();
+            if (failed.Count == 0)
+            {
+                StatusText = $"{_allFetchedItems.Count} 件の記事を取得しました（{DateTime.Now:HH:mm:ss} 更新）";
+            }
+            else
+            {
+                HasError = true;
+                ErrorMessage = failed.Count == 1
+                    ? $"「{failed[0].Feed.Name}」の取得に失敗しました: {failed[0].Error!.Message}"
+                    : $"{failed.Count} 件のフィードの取得に失敗しました: {string.Join("、", failed.Select(r => r.Feed.Name))}";
+                StatusText = $"{_allFetchedItems.Count} 件の記事を取得しました（{failed.Count} 件のフィードで失敗、{DateTime.Now:HH:mm:ss} 更新）";
+            }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!token.IsCancellationRequested)
         {
             HasError = true;
             ErrorMessage = $"フィードの取得に失敗しました: {ex.Message}";
@@ -153,8 +193,14 @@ public partial class MainPageViewModel : ObservableObject
         }
         finally
         {
-            IsLoading = false;
-            HasNoItems = DisplayedItems.Count == 0;
+            // 最新の読み込みだけが読み込み状態を解除する
+            if (_loadCts == cts)
+            {
+                _loadCts = null;
+                IsLoading = false;
+                HasNoItems = DisplayedItems.Count == 0;
+            }
+            cts.Dispose();
         }
     }
 
@@ -210,7 +256,7 @@ public partial class MainPageViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public async Task AddFeedAsync()
+    public void AddFeed()
     {
         if (string.IsNullOrWhiteSpace(NewFeedUrl))
             return;
@@ -229,12 +275,11 @@ public partial class MainPageViewModel : ObservableObject
         var newChannel = new FeedChannel { Name = name, Url = url };
         FeedSources.Add(newChannel);
         SaveFeeds();
+        // 選択を切り替えると OnSelectedFeedSourceChanged で取得が始まる
         SelectedFeedSource = newChannel;
 
         NewFeedUrl = string.Empty;
         NewFeedName = string.Empty;
-
-        await LoadFeedsAsync();
     }
 
     [RelayCommand]

@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.ServiceModel.Syndication;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
@@ -46,14 +47,14 @@ public class RssService
     /// <summary>
     /// 指定されたURLのRSS/Atom/RDFフィードを取得し、FeedItemのリストとして返す
     /// </summary>
-    public async Task<List<FeedItem>> FetchFeedAsync(string feedUrl, string? customFeedName = null)
+    public async Task<List<FeedItem>> FetchFeedAsync(string feedUrl, string? customFeedName = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(feedUrl))
             return new List<FeedItem>();
 
         try
         {
-            var responseBytes = await HttpClient.GetByteArrayAsync(feedUrl);
+            var responseBytes = await HttpClient.GetByteArrayAsync(feedUrl, cancellationToken);
 
             // まず SyndicationFeed (RSS 2.0 / Atom 1.0) でパースを試みる
             try
@@ -153,9 +154,19 @@ public class RssService
                         channel?.Element("title")?.Value ??
                         "Feed";
 
-        var itemElements = doc.Root?.Elements(rss1 + "item") ??
-                           doc.Root?.Elements("item") ??
-                           Enumerable.Empty<XElement>();
+        // Elements() は該当なしでも null ではなく空シーケンスを返すため、件数で次の候補へフォールバックする
+        // 1. RSS 1.0 (RDF): ルート直下の名前空間付き <item>
+        // 2. ルート直下の名前空間なし <item>
+        // 3. RSS 0.9x / 2.0: <channel> 配下の <item>
+        var itemElements = doc.Root?.Elements(rss1 + "item").ToList() ?? new List<XElement>();
+        if (itemElements.Count == 0)
+        {
+            itemElements = doc.Root?.Elements("item").ToList() ?? new List<XElement>();
+        }
+        if (itemElements.Count == 0 && channel != null)
+        {
+            itemElements = channel.Elements(rss1 + "item").Concat(channel.Elements("item")).ToList();
+        }
 
         foreach (var el in itemElements)
         {
@@ -180,8 +191,12 @@ public class RssService
                              string.Empty;
 
             // 画像の探索: hatena:imageurl, enclosure, media:thumbnail, imgタグ
+            var enclosure = el.Element("enclosure");
+            var enclosureUrl = enclosure?.Attribute("url")?.Value;
             var imageUrl = el.Element(hatena + "imageurl")?.Value ??
-                           el.Element("enclosure")?.Attribute("url")?.Value;
+                           (enclosureUrl != null && IsImageResource(enclosure!.Attribute("type")?.Value, enclosureUrl)
+                               ? enclosureUrl
+                               : null);
 
             if (string.IsNullOrEmpty(imageUrl) && !string.IsNullOrWhiteSpace(rawSummary))
             {
@@ -215,13 +230,13 @@ public class RssService
     /// </summary>
     private static string? ExtractImageUrl(SyndicationItem item, string rawHtml)
     {
-        // 1. Enclosure リンクから検索
+        // 1. Enclosure リンクから検索 (音声・動画などの添付ファイルは除外)
         foreach (var link in item.Links)
         {
             if (link.RelationshipType == "enclosure")
             {
                 var uri = link.Uri?.ToString();
-                if (!string.IsNullOrEmpty(uri))
+                if (!string.IsNullOrEmpty(uri) && IsImageResource(link.MediaType, uri))
                 {
                     return uri;
                 }
@@ -240,7 +255,16 @@ public class RssService
                     var urlAttr = xElem.Attribute("url")?.Value;
                     if (!string.IsNullOrWhiteSpace(urlAttr))
                     {
-                        return urlAttr;
+                        // media:thumbnail は常に画像。media:content / enclosure は medium・type 属性で画像か判定する
+                        var medium = xElem.Attribute("medium")?.Value;
+                        var isImage = localName == "thumbnail" ||
+                                      (medium == null || medium.Equals("image", StringComparison.OrdinalIgnoreCase)) &&
+                                      IsImageResource(xElem.Attribute("type")?.Value, urlAttr);
+                        if (isImage)
+                        {
+                            return urlAttr;
+                        }
+                        continue;
                     }
                     if (localName == "imageurl" && !string.IsNullOrWhiteSpace(xElem.Value))
                     {
@@ -280,6 +304,30 @@ public class RssService
         }
 
         return null;
+    }
+
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif", ".svg"
+    };
+
+    /// <summary>
+    /// 添付ファイルが画像かどうかを判定する。
+    /// MIMEタイプがあれば image/* かで判定し、なければ拡張子で判定する
+    /// (拡張子のないURLは CDN の画像であることが多いため画像とみなす)
+    /// </summary>
+    private static bool IsImageResource(string? mediaType, string url)
+    {
+        if (!string.IsNullOrWhiteSpace(mediaType))
+        {
+            return mediaType.Trim().StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+
+        var extension = Path.GetExtension(uri.AbsolutePath);
+        return string.IsNullOrEmpty(extension) || ImageExtensions.Contains(extension);
     }
 
     /// <summary>

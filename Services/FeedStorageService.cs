@@ -24,22 +24,55 @@ public class FeedStorageService
     }
 
     /// <summary>
-    /// 保存済みのフィード一覧を読み込む。未保存または読み込み失敗時は null を返す
+    /// 読み込みに失敗したファイルを退避できなかった場合、上書きで元データを失わないよう保存を止める
     /// </summary>
-    public List<FeedChannel>? Load()
+    private bool _saveDisabled;
+
+    /// <summary>
+    /// 保存済みのフィード一覧を読み込む。未保存または読み込み失敗時は null を返す。
+    /// 読み込みに失敗した場合は、元のファイルを退避したうえで warning に利用者向けのメッセージを返す
+    /// </summary>
+    public List<FeedChannel>? Load(out string? warning)
     {
+        warning = null;
+
+        if (!File.Exists(_filePath))
+            return null;
+
         try
         {
-            if (!File.Exists(_filePath))
-                return null;
-
             var json = File.ReadAllText(_filePath);
-            return JsonSerializer.Deserialize(json, FeedStorageJsonContext.Default.ListFeedChannel);
+            var feeds = JsonSerializer.Deserialize(json, FeedStorageJsonContext.Default.ListFeedChannel)
+                        ?? throw new JsonException("フィード一覧が空 (null) です。");
+            feeds.RemoveAll(f => f == null);
+            return feeds;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to load feeds: {ex.Message}");
+            warning = BackupBrokenFile(ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// 読み込めなかったファイルを別名でコピーして残す。次回の保存で上書きされても元データを復元できるようにする
+    /// </summary>
+    private string BackupBrokenFile(Exception loadError)
+    {
+        var backupPath = $"{_filePath}.broken-{DateTime.Now:yyyyMMdd-HHmmss}";
+        try
+        {
+            File.Copy(_filePath, backupPath, overwrite: true);
+            return $"保存されたフィード一覧を読み込めなかったため、初期設定のフィードで起動しました ({loadError.Message})。" +
+                   $"元のファイルは {backupPath} に退避しました。";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to back up feeds file: {ex.Message}");
+            _saveDisabled = true;
+            return $"保存されたフィード一覧を読み込めなかったため、初期設定のフィードで起動しました ({loadError.Message})。" +
+                   $"元のファイル ({_filePath}) を退避できなかったため、上書きを防ぐためにこのセッションではフィード一覧を保存しません。";
         }
     }
 
@@ -48,6 +81,9 @@ public class FeedStorageService
     /// </summary>
     public void Save(IEnumerable<FeedChannel> feeds)
     {
+        if (_saveDisabled)
+            return;
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);

@@ -200,14 +200,23 @@
             Height="3"
             HorizontalAlignment="Stretch" />
 
-        <!-- エラーバー -->
-        <InfoBar
-            Grid.Row="2"
-            IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}"
-            Severity="Error"
-            Title="フィード取得エラー"
-            Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
-            Margin="20,8,20,0" />
+        <StackPanel Grid.Row="2">
+            <!-- フィード一覧の読み込み失敗通知 -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasStorageWarning, Mode=TwoWay}"
+                Severity="Warning"
+                Title="フィード一覧の読み込みエラー"
+                Message="{x:Bind ViewModel.StorageWarning, Mode=OneWay}"
+                Margin="20,8,20,0" />
+
+            <!-- エラーバー -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.HasError, Mode=TwoWay}"
+                Severity="Error"
+                Title="フィード取得エラー"
+                Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                Margin="20,8,20,0" />
+        </StackPanel>
 
         <!-- 記事グリッド表示 (レスポンシブなUniformGridLayout) -->
         <ScrollViewer Grid.Row="3" Padding="20,16,20,20">
