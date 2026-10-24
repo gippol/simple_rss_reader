@@ -101,11 +101,12 @@ public class RssService
             var link = item.Links.FirstOrDefault(l => l.RelationshipType == "alternate" || string.IsNullOrEmpty(l.RelationshipType))?.Uri
                        ?? item.Links.FirstOrDefault()?.Uri;
 
-            var publishDate = item.PublishDate != DateTimeOffset.MinValue
+            // 日付がない記事は null (取得時刻で埋めると常に最新扱いになってしまうため)
+            DateTimeOffset? publishDate = item.PublishDate != DateTimeOffset.MinValue
                 ? item.PublishDate
                 : item.LastUpdatedTime != DateTimeOffset.MinValue
                     ? item.LastUpdatedTime
-                    : DateTimeOffset.Now;
+                    : null;
 
             // 本文 / 概要
             var rawSummary = item.Summary?.Text ?? string.Empty;
@@ -180,7 +181,7 @@ public class RssService
             }
 
             var dateStr = el.Element(dc + "date")?.Value ?? el.Element("pubDate")?.Value;
-            var publishDate = DateTimeOffset.Now;
+            DateTimeOffset? publishDate = null;
             if (!string.IsNullOrEmpty(dateStr) && DateTimeOffset.TryParse(dateStr, out var parsedDate))
             {
                 publishDate = parsedDate;

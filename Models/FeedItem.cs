@@ -9,7 +9,10 @@ public class FeedItem
 {
     public required string Title { get; init; }
     public Uri? Link { get; init; }
-    public DateTimeOffset PublishDate { get; init; }
+    /// <summary>
+    /// 公開日時。フィードに日付がない記事は null
+    /// </summary>
+    public DateTimeOffset? PublishDate { get; init; }
     public string? ImageUrl { get; init; }
     public bool HasImage => !string.IsNullOrWhiteSpace(ImageUrl);
     public required string SourceFeedName { get; init; }
@@ -27,8 +30,11 @@ public class FeedItem
     {
         get
         {
+            if (PublishDate is not { } publishDate)
+                return "日付不明";
+
             var now = DateTimeOffset.Now;
-            var diff = now - PublishDate;
+            var diff = now - publishDate;
 
             if (diff.TotalMinutes < 1)
                 return "たった今";
@@ -39,7 +45,7 @@ public class FeedItem
             if (diff.TotalDays < 7)
                 return $"{(int)diff.TotalDays}日前";
 
-            return PublishDate.ToLocalTime().ToString("yyyy/MM/dd HH:mm");
+            return publishDate.ToLocalTime().ToString("yyyy/MM/dd HH:mm");
         }
     }
 }

@@ -227,14 +227,14 @@ public partial class MainPageViewModel : ObservableObject
                 item.SourceFeedName.Contains(query, StringComparison.OrdinalIgnoreCase));
         }
 
-        // ソート
+        // ソート (日付順では、日付不明の記事はどちらの順でも末尾に並べる)
         filtered = CurrentSortOrder switch
         {
-            SortOrder.NewestFirst => filtered.OrderByDescending(i => i.PublishDate),
-            SortOrder.OldestFirst => filtered.OrderBy(i => i.PublishDate),
+            SortOrder.NewestFirst => filtered.OrderBy(i => i.PublishDate == null).ThenByDescending(i => i.PublishDate),
+            SortOrder.OldestFirst => filtered.OrderBy(i => i.PublishDate == null).ThenBy(i => i.PublishDate),
             SortOrder.TitleAscending => filtered.OrderBy(i => i.Title, StringComparer.CurrentCultureIgnoreCase),
             SortOrder.TitleDescending => filtered.OrderByDescending(i => i.Title, StringComparer.CurrentCultureIgnoreCase),
-            _ => filtered.OrderByDescending(i => i.PublishDate)
+            _ => filtered.OrderBy(i => i.PublishDate == null).ThenByDescending(i => i.PublishDate)
         };
 
         DisplayedItems.Clear();
