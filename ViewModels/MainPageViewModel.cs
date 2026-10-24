@@ -243,9 +243,13 @@ public partial class MainPageViewModel : ObservableObject
         if (channel == null || channel.IsAllFeeds)
             return;
 
+        // Remove すると TwoWay バインドの ComboBox が SelectedFeedSource に null を書き戻すため、
+        // 選択中だったかどうかは削除前に判定しておく
+        var wasSelected = SelectedFeedSource == channel;
+
         FeedSources.Remove(channel);
         SaveFeeds();
-        if (SelectedFeedSource == channel)
+        if (wasSelected)
         {
             // 「すべてのフィード」に切り替え (OnSelectedFeedSourceChanged で再取得される)
             SelectedFeedSource = FeedSources.FirstOrDefault();
