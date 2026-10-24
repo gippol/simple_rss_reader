@@ -88,13 +88,6 @@ C# / .NET 10 & WinUI 3 (Windows App SDK) で構築された、モダンでレス
 
 ## 🚀 起動方法
 
-### Visual Studio で起動する場合:
-1. `RssReader.csproj` を Visual Studio で開きます。
-2. スタートアッププロジェクトが `RssReader` になっていることを確認し、`F5` または `Ctrl + F5` で実行します。
-
-### VS Code で起動する場合:
-- `.vscode/launch.json` の「WinApp: Launch and Attach」構成で `F5` 実行できます (事前に `dotnet build` タスクが走ります)。
-
 ### コマンドライン (CLI) で起動・ビルドする場合:
 ```powershell
 # ビルド
