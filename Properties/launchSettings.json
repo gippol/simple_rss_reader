@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "RssReader (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "RssReader (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
