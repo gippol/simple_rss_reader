@@ -7,7 +7,6 @@
 [Xx]86/
 [Aa][Rr][Mm]64/
 .vs/
-.vscode/
 *.user
 *.suo
 *.userosscache
