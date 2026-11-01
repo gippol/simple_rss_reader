@@ -48,6 +48,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
@@ -173,9 +174,53 @@
                 </Button.Flyout>
             </Button>
 
+            <!-- 表示設定ボタン (Flyout) -->
+            <Button
+                Grid.Column="5"
+                VerticalAlignment="Center"
+                ToolTipService.ToolTip="表示設定">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE713;" FontSize="14" />
+                    <TextBlock Text="設定" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button.Flyout>
+                    <Flyout>
+                        <StackPanel Width="320" Spacing="12">
+                            <TextBlock Text="表示設定" Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <ToggleSwitch
+                                Header="記事が多いフィードを日付で絞り込む"
+                                IsOn="{x:Bind ViewModel.LimitByDateEnabled, Mode=TwoWay}"
+                                OnContent="オン"
+                                OffContent="オフ" />
+                            <NumberBox
+                                Header="しきい値（この件数を超えたら絞り込む）"
+                                Value="{x:Bind ViewModel.ItemThresholdValue, Mode=TwoWay}"
+                                IsEnabled="{x:Bind ViewModel.LimitByDateEnabled, Mode=OneWay}"
+                                Minimum="1"
+                                SmallChange="10"
+                                LargeChange="50"
+                                SpinButtonPlacementMode="Inline" />
+                            <NumberBox
+                                Header="表示する期間（直近の日数）"
+                                Value="{x:Bind ViewModel.RecentDaysValue, Mode=TwoWay}"
+                                IsEnabled="{x:Bind ViewModel.LimitByDateEnabled, Mode=OneWay}"
+                                Minimum="1"
+                                SmallChange="1"
+                                LargeChange="7"
+                                SpinButtonPlacementMode="Inline" />
+                            <TextBlock
+                                Text="フィードごとに判定します。期間内の記事がないフィードは、新しい順にしきい値の件数だけ表示します。"
+                                FontSize="12"
+                                TextWrapping="Wrap"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+
             <!-- 検索ボックス -->
             <AutoSuggestBox
-                Grid.Column="5"
+                Grid.Column="6"
                 QueryIcon="Find"
                 PlaceholderText="記事タイトルやキーワードで絞り込み..."
                 Text="{x:Bind ViewModel.SearchText, Mode=TwoWay}"
@@ -184,7 +229,7 @@
 
             <!-- ステータス・取得件数 -->
             <TextBlock
-                Grid.Column="6"
+                Grid.Column="7"
                 Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                 VerticalAlignment="Center"
                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -216,6 +261,19 @@
                 Title="フィード取得エラー"
                 Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
                 Margin="20,8,20,0" />
+
+            <!-- 日付による絞り込みの通知 -->
+            <InfoBar
+                IsOpen="{x:Bind ViewModel.IsDateLimited, Mode=OneWay}"
+                IsClosable="False"
+                Severity="Informational"
+                Title="表示件数を絞り込んでいます"
+                Message="{x:Bind ViewModel.DateLimitMessage, Mode=OneWay}"
+                Margin="20,8,20,0">
+                <InfoBar.ActionButton>
+                    <Button Content="すべて表示" Command="{x:Bind ViewModel.ShowAllItemsCommand}" />
+                </InfoBar.ActionButton>
+            </InfoBar>
         </StackPanel>
 
         <!-- 記事グリッド表示 (レスポンシブなUniformGridLayout) -->

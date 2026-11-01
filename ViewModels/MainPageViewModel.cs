@@ -16,8 +16,71 @@ public partial class MainPageViewModel : ObservableObject
 {
     private readonly RssService _rssService = new();
     private readonly FeedStorageService _feedStorage = new();
+    private readonly SettingsService _settingsService = new();
     private readonly List<FeedItem> _allFetchedItems = new();
     private CancellationTokenSource? _loadCts;
+
+    /// <summary>
+    /// 設定の読み込み中は変更通知で保存・再描画しない
+    /// </summary>
+    private bool _settingsLoaded;
+
+    /// <summary>
+    /// 「すべて表示」が押されたら、次の読み込みまで日付の絞り込みを解除する
+    /// </summary>
+    private bool _showAllTemporarily;
+
+    /// <summary>
+    /// 日付の絞り込みで非表示にした記事数
+    /// </summary>
+    private int _hiddenItemCount;
+
+    [ObservableProperty]
+    public partial bool LimitByDateEnabled { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ItemThresholdValue))]
+    public partial int ItemThreshold { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RecentDaysValue))]
+    public partial int RecentDays { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsDateLimited { get; set; }
+
+    [ObservableProperty]
+    public partial string? DateLimitMessage { get; set; }
+
+    /// <summary>
+    /// NumberBox (double) とのバインド用。空欄 (NaN) にされた場合は元の値に戻す
+    /// </summary>
+    public double ItemThresholdValue
+    {
+        get => ItemThreshold;
+        set
+        {
+            if (double.IsNaN(value))
+                OnPropertyChanged();
+            else
+                ItemThreshold = Math.Max(1, (int)Math.Round(value));
+        }
+    }
+
+    /// <summary>
+    /// NumberBox (double) とのバインド用。空欄 (NaN) にされた場合は元の値に戻す
+    /// </summary>
+    public double RecentDaysValue
+    {
+        get => RecentDays;
+        set
+        {
+            if (double.IsNaN(value))
+                OnPropertyChanged();
+            else
+                RecentDays = Math.Max(1, (int)Math.Round(value));
+        }
+    }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RemoveSelectedFeedCommand))]
@@ -71,8 +134,39 @@ public partial class MainPageViewModel : ObservableObject
 
     public MainPageViewModel()
     {
+        // フィード選択で読み込みが始まる前に、絞り込み設定を反映しておく
+        LoadSettings();
         InitializeFeeds();
     }
+
+    private void LoadSettings()
+    {
+        var settings = _settingsService.Load();
+        LimitByDateEnabled = settings.LimitByDateEnabled;
+        ItemThreshold = settings.ItemThreshold;
+        RecentDays = settings.RecentDays;
+        _settingsLoaded = true;
+    }
+
+    private void OnDisplaySettingsChanged()
+    {
+        if (!_settingsLoaded)
+            return;
+
+        _settingsService.Save(new DisplaySettings
+        {
+            LimitByDateEnabled = LimitByDateEnabled,
+            ItemThreshold = ItemThreshold,
+            RecentDays = RecentDays
+        });
+        ApplyFilterAndSort();
+    }
+
+    partial void OnLimitByDateEnabledChanged(bool value) => OnDisplaySettingsChanged();
+
+    partial void OnItemThresholdChanged(int value) => OnDisplaySettingsChanged();
+
+    partial void OnRecentDaysChanged(int value) => OnDisplaySettingsChanged();
 
     private void InitializeFeeds()
     {
@@ -128,6 +222,7 @@ public partial class MainPageViewModel : ObservableObject
         var token = cts.Token;
 
         IsLoading = true;
+        _showAllTemporarily = false;
         HasError = false;
         ErrorMessage = null;
         StatusText = "フィードを更新中...";
@@ -171,10 +266,15 @@ public partial class MainPageViewModel : ObservableObject
 
             ApplyFilterAndSort();
 
+            // 日付の絞り込みで隠した記事がある場合は、表示件数も併記する
+            var countText = _hiddenItemCount > 0
+                ? $"{_allFetchedItems.Count - _hiddenItemCount} 件を表示（全 {_allFetchedItems.Count} 件取得）"
+                : $"{_allFetchedItems.Count} 件の記事を取得しました";
+
             var failed = results.Where(r => r.Error != null).ToList();
             if (failed.Count == 0)
             {
-                StatusText = $"{_allFetchedItems.Count} 件の記事を取得しました（{DateTime.Now:HH:mm:ss} 更新）";
+                StatusText = $"{countText}（{DateTime.Now:HH:mm:ss} 更新）";
             }
             else
             {
@@ -182,7 +282,7 @@ public partial class MainPageViewModel : ObservableObject
                 ErrorMessage = failed.Count == 1
                     ? $"「{failed[0].Feed.Name}」の取得に失敗しました: {failed[0].Error!.Message}"
                     : $"{failed.Count} 件のフィードの取得に失敗しました: {string.Join("、", failed.Select(r => r.Feed.Name))}";
-                StatusText = $"{_allFetchedItems.Count} 件の記事を取得しました（{failed.Count} 件のフィードで失敗、{DateTime.Now:HH:mm:ss} 更新）";
+                StatusText = $"{countText}（{failed.Count} 件のフィードで失敗、{DateTime.Now:HH:mm:ss} 更新）";
             }
         }
         catch (Exception ex) when (!token.IsCancellationRequested)
@@ -213,9 +313,62 @@ public partial class MainPageViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    public void ShowAllItems()
+    {
+        _showAllTemporarily = true;
+        ApplyFilterAndSort();
+    }
+
+    /// <summary>
+    /// 記事数がしきい値を超えるフィードだけ、直近の記事に絞り込む。
+    /// フィードごとに判定するので、記事の少ないフィードが大量配信のフィードに埋もれない
+    /// </summary>
+    private List<FeedItem> ApplyDateLimit(List<FeedItem> items)
+    {
+        _hiddenItemCount = 0;
+        if (!LimitByDateEnabled || _showAllTemporarily)
+            return items;
+
+        var cutoff = DateTimeOffset.Now.AddDays(-RecentDays);
+        var result = new List<FeedItem>(items.Count);
+        foreach (var group in items.GroupBy(i => i.SourceFeedUrl))
+        {
+            var feedItems = group.ToList();
+            if (feedItems.Count <= ItemThreshold)
+            {
+                result.AddRange(feedItems);
+                continue;
+            }
+
+            // 日付不明の記事は期間外として扱う
+            var recent = feedItems.Where(i => i.PublishDate >= cutoff).ToList();
+
+            // 期間内の記事がない (更新が止まっている・日付がない) 場合でも空にせず、新しい順にしきい値の件数だけ残す
+            if (recent.Count == 0)
+            {
+                recent = feedItems
+                    .OrderBy(i => i.PublishDate == null)
+                    .ThenByDescending(i => i.PublishDate)
+                    .Take(ItemThreshold)
+                    .ToList();
+            }
+
+            result.AddRange(recent);
+            _hiddenItemCount += feedItems.Count - recent.Count;
+        }
+
+        return result;
+    }
+
     private void ApplyFilterAndSort()
     {
-        IEnumerable<FeedItem> filtered = _allFetchedItems;
+        IEnumerable<FeedItem> filtered = ApplyDateLimit(_allFetchedItems);
+
+        IsDateLimited = _hiddenItemCount > 0;
+        DateLimitMessage = IsDateLimited
+            ? $"記事が {ItemThreshold} 件を超えるフィードは、直近 {RecentDays} 日間の記事だけを表示しています（{_hiddenItemCount} 件を非表示）。"
+            : null;
 
         // 検索フィルター
         if (!string.IsNullOrWhiteSpace(SearchText))
