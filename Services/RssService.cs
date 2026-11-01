@@ -34,18 +34,15 @@ public class RssService
     {
         return new List<FeedChannel>
         {
-            new() { Name = "Zenn (トレンド)", Url = "https://zenn.dev/feed" },
-            new() { Name = "qiita (popular)", Url = "https://qiita.com/popular-items/feed.atom" },
-            new() { Name = "ITmedia AI＋", Url = "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml" },
-            new() { Name = "ITmedia NEWS セキュリティ", Url = "https://rss.itmedia.co.jp/rss/2.0/news_security.xml" },
-            new() { Name = "BBC News (World)", Url = "https://feeds.bbci.co.uk/news/technology/rss.xml" },
-            new() { Name = "The Verge (Tech)", Url = "https://www.theverge.com/rss/index.xml" },
-            new() { Name = "TechCrunch", Url = "https://techcrunch.com/feed/" }
+            new() { Name = "CISA", Url = "https://www.cisa.gov/cybersecurity-advisories/all.xml" },
+            new() { Name = "arXiv(AI)", Url = "https://rss.arxiv.org/rss/cs.AI" },
+            new() { Name = "Hugging Face Blog", Url = "https://huggingface.co/blog/feed.xml" },
+            new() { Name = "Google Research", Url = "https://research.google/blog/rss/" },
         };
     }
 
     /// <summary>
-    /// 指定されたURLのRSS/Atom/RDFフィードを取得し、FeedItemのリストとして返す
+    /// 指定されたURLのRSS 2.0 / Atomフィードを取得し、FeedItemのリストとして返す
     /// </summary>
     public async Task<List<FeedItem>> FetchFeedAsync(string feedUrl, string? customFeedName = null, CancellationToken cancellationToken = default)
     {
@@ -56,33 +53,18 @@ public class RssService
         {
             var responseBytes = await HttpClient.GetByteArrayAsync(feedUrl, cancellationToken);
 
-            // まず SyndicationFeed (RSS 2.0 / Atom 1.0) でパースを試みる
-            try
+            // SyndicationFeed (RSS 2.0 / Atom 1.0) でパースする。
+            // RSS 1.0 (RDF) などの非対応形式は XmlException となり、呼び出し元で取得失敗として扱われる
+            using var stream = new MemoryStream(responseBytes);
+            using var xmlReader = XmlReader.Create(stream, new XmlReaderSettings
             {
-                using var stream = new MemoryStream(responseBytes);
-                using var xmlReader = XmlReader.Create(stream, new XmlReaderSettings
-                {
-                    DtdProcessing = DtdProcessing.Ignore,
-                    IgnoreComments = true
-                });
+                DtdProcessing = DtdProcessing.Ignore,
+                IgnoreComments = true
+            });
 
-                var feed = SyndicationFeed.Load(xmlReader);
-                if (feed != null)
-                {
-                    var feedTitle = customFeedName ?? feed.Title?.Text ?? "Feed";
-                    return ParseSyndicationFeed(feed, feedTitle, feedUrl);
-                }
-            }
-            catch (XmlException)
-            {
-                // SyndicationFeed が対応していない RDF (RSS 1.0) などの場合はフォールバック
-            }
-
-            // フォールバック: XDocument で直接 XML をパース (RSS 1.0 / RDF 等に対応)
-            using (var stream = new MemoryStream(responseBytes))
-            {
-                return ParseRdfOrGenericXml(stream, customFeedName, feedUrl);
-            }
+            var feed = SyndicationFeed.Load(xmlReader);
+            var feedTitle = customFeedName ?? feed.Title?.Text ?? "Feed";
+            return ParseSyndicationFeed(feed, feedTitle, feedUrl);
         }
         catch (Exception ex)
         {
@@ -130,90 +112,6 @@ public class RssService
                 SourceFeedName = feedTitle,
                 SourceFeedUrl = feedUrl,
                 Summary = plainSummary
-            });
-        }
-
-        return items;
-    }
-
-    /// <summary>
-    /// RSS 1.0 (RDF) またはフォールバック用 XML パーサー
-    /// </summary>
-    private static List<FeedItem> ParseRdfOrGenericXml(Stream stream, string? customFeedName, string feedUrl)
-    {
-        var items = new List<FeedItem>();
-        var doc = XDocument.Load(stream);
-
-        XNamespace rdf = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-        XNamespace rss1 = "http://purl.org/rss/1.0/";
-        XNamespace dc = "http://purl.org/dc/elements/1.1/";
-        XNamespace hatena = "http://www.hatena.ne.jp/info/xmlns#";
-        XNamespace contentNs = "http://purl.org/rss/1.0/modules/content/";
-
-        var channel = doc.Root?.Element(rss1 + "channel") ?? doc.Root?.Element("channel");
-        var feedTitle = customFeedName ??
-                        channel?.Element(rss1 + "title")?.Value ??
-                        channel?.Element("title")?.Value ??
-                        "Feed";
-
-        // Elements() は該当なしでも null ではなく空シーケンスを返すため、件数で次の候補へフォールバックする
-        // 1. RSS 1.0 (RDF): ルート直下の名前空間付き <item>
-        // 2. ルート直下の名前空間なし <item>
-        // 3. RSS 0.9x / 2.0: <channel> 配下の <item>
-        var itemElements = doc.Root?.Elements(rss1 + "item").ToList() ?? new List<XElement>();
-        if (itemElements.Count == 0)
-        {
-            itemElements = doc.Root?.Elements("item").ToList() ?? new List<XElement>();
-        }
-        if (itemElements.Count == 0 && channel != null)
-        {
-            itemElements = channel.Elements(rss1 + "item").Concat(channel.Elements("item")).ToList();
-        }
-
-        foreach (var el in itemElements)
-        {
-            var title = el.Element(rss1 + "title")?.Value ?? el.Element("title")?.Value ?? "(タイトルなし)";
-            var linkStr = el.Element(rss1 + "link")?.Value ?? el.Element("link")?.Value;
-            Uri? link = null;
-            if (!string.IsNullOrEmpty(linkStr) && Uri.TryCreate(linkStr, UriKind.Absolute, out var parsedUri))
-            {
-                link = parsedUri;
-            }
-
-            var dateStr = el.Element(dc + "date")?.Value ?? el.Element("pubDate")?.Value;
-            DateTimeOffset? publishDate = null;
-            if (!string.IsNullOrEmpty(dateStr) && DateTimeOffset.TryParse(dateStr, out var parsedDate))
-            {
-                publishDate = parsedDate;
-            }
-
-            var rawSummary = el.Element(rss1 + "description")?.Value ??
-                             el.Element("description")?.Value ??
-                             el.Element(contentNs + "encoded")?.Value ??
-                             string.Empty;
-
-            // 画像の探索: hatena:imageurl, enclosure, media:thumbnail, imgタグ
-            var enclosure = el.Element("enclosure");
-            var enclosureUrl = enclosure?.Attribute("url")?.Value;
-            var imageUrl = el.Element(hatena + "imageurl")?.Value ??
-                           (enclosureUrl != null && IsImageResource(enclosure!.Attribute("type")?.Value, enclosureUrl)
-                               ? enclosureUrl
-                               : null);
-
-            if (string.IsNullOrEmpty(imageUrl))
-            {
-                imageUrl = FindImageInHtml(rawSummary);
-            }
-
-            items.Add(new FeedItem
-            {
-                Title = WebUtility.HtmlDecode(title).Trim(),
-                Link = link,
-                PublishDate = publishDate,
-                ImageUrl = imageUrl,
-                SourceFeedName = feedTitle,
-                SourceFeedUrl = feedUrl,
-                Summary = CleanHtml(rawSummary)
             });
         }
 
